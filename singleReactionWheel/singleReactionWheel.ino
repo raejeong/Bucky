@@ -4,23 +4,34 @@
 #include "Utility.h"
 #include "MPU6050_6Axis_MotionApps20.h"
 
+// Arduino Wire library is required if I2Cdev I2CDEV_ARDUINO_WIRE implementation
+// is used in I2Cdev.h
+#if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
+    #include "Wire.h"
+#endif
+
 MPU6050 mpu;
 
-#define INTERRUPT_PIN 3
+#define INTERRUPT_PIN 1
 #define PWM_PIN 5
 #define DIR_PIN 6
 #define MAX_VOLTAGE 12
 #define MIN_VOLTAGE 1
-#define ENCODER_INTERRUPT 2
+#define ENCODER_INTERRUPT 0
 #define ENCODER_PIN_A 2
 #define ENCODER_PIN_B 4
 #define ENCODER_REVERSED
 
+#define K_P 1
+#define K_D 0
+#define RESISTANCE 0.8
+#define K_T 0.0225
+#define K_E 0.0198
+#define MOTOR_DIR -1
+
 float robotAngle;
-float robotAngleRef;
+float robotAngleRef = 0.03;
 float robotAngleError;
-float Kp = 100;
-float Kd = 0.2;
 float torque;
 unsigned long tPeriod = 0;
 unsigned long tOld = 0;
@@ -57,9 +68,17 @@ void runMotor(float voltageInput)
     	voltageSign = 0;
   	}
 
-  	voltageInput = constrain(voltageInput,MIN_VOLTAGE,MAX_VOLTAGE)*10;		// multiply by 10 to keep higher resolution
-  	int motorPWM = map((int)voltageInput,MIN_VOLTAGE*10,MAX_VOLTAGE*10,0,255);
-    digitalWrite(DIR_PIN, voltageSign);
+  	voltageInput = abs(voltageInput);		
+  	if(voltageInput < MIN_VOLTAGE)
+  	{
+  		voltageInput = MIN_VOLTAGE;
+  	}	
+  	if(voltageInput > MAX_VOLTAGE)
+  	{	
+  		voltageInput = MAX_VOLTAGE;
+  	}
+  	int motorPWM = map((int)voltageInput*10,0,MAX_VOLTAGE*10,0,254);
+  	digitalWrite(DIR_PIN, voltageSign);
     analogWrite(PWM_PIN, motorPWM);
 }
 
@@ -90,7 +109,7 @@ void setup()
 
     #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
         Wire.begin();
-        Wire.setClock(400000); // 400kHz I2C clock. Comment this line if having compilation difficulties
+        //Wire.setClock(400000); // 400kHz I2C clock. Comment this line if having compilation difficulties
     #elif I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
         Fastwire::setup(400, true);
     #endif
@@ -100,8 +119,8 @@ void setup()
     mpu.initialize();
 
     // verify connection
-    Serial.println(F("Testing device connections..."));
-    Serial.println(mpu.testConnection() ? F("MPU6050 connection successful") : F("MPU6050 connection failed"));
+    //Serial.println(F("Testing device connections..."));
+    //Serial.println(mpu.testConnection() ? F("MPU6050 connection successful") : F("MPU6050 connection failed"));
     delay(2);
 
     devStatus = mpu.dmpInitialize();
@@ -115,16 +134,16 @@ void setup()
     // make sure it worked (returns 0 if so)
     if (devStatus == 0) {
         // turn on the DMP, now that it's ready
-        Serial.println(F("Enabling DMP..."));
+        //Serial.println(F("Enabling DMP..."));
         mpu.setDMPEnabled(true);
 
         // enable Arduino interrupt detection
-        Serial.println(F("Enabling interrupt detection (Arduino external interrupt 0)..."));
-        attachInterrupt(digitalPinToInterrupt(INTERRUPT_PIN), dmpDataReady, RISING);
+        //Serial.println(F("Enabling interrupt detection (Arduino external interrupt 0)..."));
+        attachInterrupt(INTERRUPT_PIN, dmpDataReady, RISING);
         mpuIntStatus = mpu.getIntStatus();
 
         // set our DMP Ready flag so the main loop() function knows it's okay to use it
-        Serial.println(F("DMP ready! Waiting for first interrupt..."));
+        //Serial.println(F("DMP ready! Waiting for first interrupt..."));
         dmpReady = true;
 
         // get expected DMP packet size for later comparison
@@ -134,9 +153,9 @@ void setup()
         // 1 = initial memory load failed
         // 2 = DMP configuration updates failed
         // (if it's going to break, usually the code will be 1)
-        Serial.print(F("DMP Initialization failed (code "));
-        Serial.print(devStatus);
-        Serial.println(F(")"));
+        //Serial.print(F("DMP Initialization failed (code "));
+        //Serial.print(devStatus);
+        //Serial.println(F(")"));
     }
 
     tOld = millis();
@@ -168,7 +187,7 @@ void loop() {
     if ((mpuIntStatus & 0x10) || fifoCount == 1024) {
         // reset so we can continue cleanly
         mpu.resetFIFO();
-        Serial.println(F("FIFO overflow!"));
+        //Serial.println(F("FIFO overflow!"));
 
     // otherwise, check for DMP data ready interrupt (this should happen frequently)
     } else if (mpuIntStatus & 0x02) {
@@ -195,19 +214,27 @@ void loop() {
         tPeriod = millis() - tOld;
         tOld = millis();
 
-        torque = Kp*robotAngleError + Kd*gyro[1];
+        torque = K_P*robotAngleError + K_D*robotAngleError/tPeriod;
 
-        motorSpeed = (encoderTicks - encoderTicksOld)/tPeriod/8;
+    	motorSpeed = (encoderTicks - encoderTicksOld)*1000*2*3.14/(tPeriod*7.0);
         encoderTicksOld = encoderTicks;
 
-        motorVoltage = torque + kMotor*motorSpeed;
+        motorVoltage = MOTOR_DIR*((RESISTANCE/K_T)*torque + K_E*motorSpeed);
 
-        Serial.print("data\t");
+        runMotor(motorVoltage);
+        /*
+        Serial.print("robotAngleError: ");
         Serial.print(robotAngleError);
-        Serial.print("\t");
-        Serial.println(motorVoltage);
+        Serial.print(" ");
+        Serial.print("Voltage: ");
+        Serial.print(motorVoltage);
+        Serial.print(" ");
+        Serial.print("motor speed: ");
+        Serial.print(motorSpeed);
+        Serial.println(" ");
+		*/
         
-        runMotor(3);
     }
 }
+
 
